@@ -1,0 +1,12 @@
+streamlit
+pandas
+numpy
+plotly
+matplotlib
+PyPDF2
+sentence-transformers
+faiss-cpu
+groq
+beautifulsoup4
+lxml
+openpyxl
