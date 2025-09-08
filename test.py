@@ -198,7 +198,7 @@ def authenticate(username, password):
 
 
 # Get Groq API key from .env
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_API_KEY = api_key=st.secrets["GROQ_API_KEY"]
 
 groq_client = None
 try:
@@ -214,7 +214,7 @@ except Exception as e:
 # ----------------- HELPERS -----------------
 # ----------------- CONFIG -----------------
 EMBEDDING_MODEL = 'all-MiniLM-L6-v2'
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 # ----------------- HELPER FUNCTIONS -----------------
 def clean_text(text):
@@ -1015,7 +1015,7 @@ import seaborn as sns
 import pandas as pd
 import openai
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 # ----------------- Parse with OpenAI -----------------
 def parse_with_openai(text_data, filename):
@@ -1116,3 +1116,4 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
+
