@@ -6,6 +6,7 @@ matplotlib
 PyPDF2
 sentence-transformers
 faiss-cpu
+python-dotenv
 groq
 beautifulsoup4
 lxml
