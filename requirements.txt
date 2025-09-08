@@ -10,5 +10,6 @@ python-dotenv
 groq
 beautifulsoup4
 lxml
+seaborn
 openpyxl
 openai
