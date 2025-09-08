@@ -10,3 +10,4 @@ groq
 beautifulsoup4
 lxml
 openpyxl
+openai
