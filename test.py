@@ -1053,69 +1053,70 @@ import streamlit as st
 
 # Function to process the uploaded file
 def process_file(uploaded_file):
-    # Read file content (adjust for structured/unstructured)
     text_data = uploaded_file.read().decode("utf-8")
-    return text_data
-
-# Sidebar logic
+   
 with st.sidebar:
-    if st.session_state.get('authenticated', False):
+    if st.session_state.authenticated:
         st.markdown(f"### 👤 Welcome, {st.session_state.username}")
-
+        
         if st.button("🏠 Home", use_container_width=True):
             st.session_state.current_page = 'home'
             st.rerun()
-
-        # Display current session file
-        if st.session_state.get('current_file_name'):
-            st.markdown(f"### 📂 Current File: {st.session_state.current_file_name}")
-
-        # Logout
+        
+        if 'uploaded_files_history' in st.session_state and st.session_state.uploaded_files_history:
+            st.markdown("### 📂 File History")
+            for i, (filename, file_type) in enumerate(st.session_state.uploaded_files_history):
+                if st.button(f"📄 {filename}", key=f"history_{i}", use_container_width=True):
+                    # Reload the file from history
+                    st.session_state.current_filename = filename
+                    st.session_state.current_file_type = file_type
+                    st.rerun()
+        
         if st.button("🚪 Logout", use_container_width=True):
-            st.session_state.clear()  # Clears everything from session_state
             st.session_state.authenticated = False
+            st.session_state.username = ""
             st.session_state.current_page = 'home'
+            st.session_state.chat_history = []
+            st.session_state.uploaded_files_history = []
             st.rerun()
-
+        
         st.markdown("---")
-        st.markdown("### 📊 Current Session Info")
-        st.info(f"File Type: {st.session_state.get('file_type', 'None')}")
-        st.info(f"Page: {st.session_state.get('current_page', 'home')}")
-
-        if 'groq_client' in st.session_state:
+        
+        if 'uploaded_files_data' in st.session_state and st.session_state.uploaded_files_data:
+            st.markdown("### 📁 File History")
+            for filename in st.session_state.uploaded_files_data.keys():
+                file_type = "📊" if st.session_state.file_type == 'structured' else "📄"
+                if st.button(f"{file_type} {filename}", use_container_width=True, key=f"file_{filename}"):
+                    # Quick access to dashboard for this file
+                    st.session_state.current_page = 'dashboard'
+                    st.rerun()
+            
+            if st.button("🗑️ Clear All Files", use_container_width=True):
+                st.session_state.uploaded_files_data = {}
+                st.session_state.chat_history = []
+                st.success("All files cleared!")
+                st.rerun()
+        
+        st.markdown("---")
+        st.markdown("### 📊 Current Session")
+        st.info(f"File Type: {st.session_state.file_type or 'None'}")
+        st.info(f"Page: {st.session_state.current_page}")
+        
+        if GROQ_AVAILABLE and groq_client:
             st.success("🤖 AI Assistant: Ready")
         else:
             st.warning("🤖 AI Assistant: Unavailable")
 
 # Main app logic
-if not st.session_state.get('authenticated', False):
+if not st.session_state.authenticated:
     show_login()
 else:
-    if st.session_state.get('current_page') == 'home':
+    if st.session_state.current_page == 'home':
         show_home()
-
-    elif st.session_state.get('current_page') == 'file_upload':
-        uploaded_file = show_file_upload()  # Your existing file upload widget
-        if uploaded_file:
-            # Process file
-            text_data = process_file(uploaded_file)
-
-            # Store only for this current file
-            st.session_state.current_file_name = uploaded_file.name
-            st.session_state.current_file_type = st.session_state.get('file_type')
-            st.session_state.current_file_data = text_data
-
-            # Clear previous chat history
-            st.session_state.chat_history = []
-
-            # Move to dashboard or chatbot
-            st.session_state.current_page = 'dashboard'
-            st.rerun()
-
-    elif st.session_state.get('current_page') == 'dashboard':
-        show_dashboard(file_data=st.session_state.get('current_file_data'))
-
-    elif st.session_state.get('current_page') == 'chatbot':
-        show_chatbot(file_data=st.session_state.get('current_file_data'))
-
+    elif st.session_state.current_page == 'file_upload':
+        show_file_upload()
+    elif st.session_state.current_page == 'dashboard':
+        show_dashboard()
+    elif st.session_state.current_page == 'chatbot':
+        show_chatbot()
 
