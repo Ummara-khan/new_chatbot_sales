@@ -751,10 +751,11 @@ def show_chatbot():
     if 'uploaded_files_data' in st.session_state and st.session_state.uploaded_files_data:
         loaded_data = st.session_state.uploaded_files_data
 
-        # File selector for chat
+        # File selector
         selected_file = st.selectbox("📂 Select file to chat about", list(loaded_data.keys()))
         df = loaded_data[selected_file]["df"]
         text_data = loaded_data[selected_file]["text"]
+        records = loaded_data[selected_file].get("records", [])
 
         st.success(f"✅ Chatting about: {selected_file}")
         st.markdown("### 💬 Chat with your data")
@@ -764,24 +765,23 @@ def show_chatbot():
         with chat_container:
             st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 
-            # Display chat history
-            for i, (role, message) in enumerate(st.session_state.chat_history):
+            for role, message in st.session_state.chat_history:
                 if role == "user":
-                    st.markdown(f'''
+                    st.markdown(f"""
                         <div class="user-message">
                             <div class="user-bubble">
                                 <strong>You:</strong> {message}
                             </div>
                         </div>
-                    ''', unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
                 else:
-                    st.markdown(f'''
+                    st.markdown(f"""
                         <div class="bot-message">
                             <div class="bot-bubble">
                                 <strong>🤖 Assistant:</strong> {message}
                             </div>
                         </div>
-                    ''', unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
 
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -795,32 +795,21 @@ def show_chatbot():
         with col1:
             if st.button("Send", use_container_width=True):
                 if user_query:
-                    # Add user message to history
                     st.session_state.chat_history.append(("user", user_query))
 
                     with st.spinner("Thinking..."):
                         response = None
 
-                        # ✅ Use parsed records if file is uploaded
-                        if selected_file:
-                            if "parsed_records" not in st.session_state:
-                                with st.spinner("🔄 Parsing file..."):
-                                    uploaded_file = loaded_data[selected_file]["file"]  # keep file object when uploading
-                                    st.session_state.parsed_records = parse_file(uploaded_file)
-
-                            records = st.session_state.parsed_records
-
-                            if not records:
-                                response = "❌ Unsupported or empty file."
+                        # ✅ Use structured records first
+                        if records:
+                            ans = answer_from_data(user_query, records)
+                            if ans:
+                                response = f"✅ {ans}"
                             else:
-                                ans = answer_from_data(user_query, records)
-                                if ans:
-                                    response = f"✅ {ans}"
-                                else:
-                                    gpt_ans = ask_gpt(user_query, records)
-                                    response = f"**Answer:** {gpt_ans}"
+                                gpt_ans = ask_gpt(user_query, records)
+                                response = f"**Answer:** {gpt_ans}"
                         else:
-                            # Fallback → structured/unstructured logic
+                            # Fallback logic
                             if st.session_state.file_type == 'unstructured' and text_data and df is not None and not df.empty:
                                 try:
                                     model = load_embedding_model()
@@ -835,7 +824,6 @@ def show_chatbot():
                             else:
                                 response = query_bot_response(df=df, pdf_text=text_data, query=user_query)
 
-                    # Add bot response to history
                     st.session_state.chat_history.append(("bot", response))
                     st.rerun()
                 else:
@@ -845,6 +833,11 @@ def show_chatbot():
             if st.button("Clear Chat", use_container_width=True):
                 st.session_state.chat_history = []
                 st.rerun()
+    else:
+        st.warning("No files uploaded. Please go back and upload files first.")
+        if st.button("← Back to Upload"):
+            st.session_state.current_page = 'file_upload'
+            st.rerun()
 
 def show_structured_analytics(df, filename):
     """Display analytics dashboard for structured data with 12 visualizations"""
@@ -1227,6 +1220,7 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
+
 
 
 
