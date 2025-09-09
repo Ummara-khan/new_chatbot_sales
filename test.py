@@ -8,6 +8,10 @@ import matplotlib.pyplot as plt
 import json
 import os
 import re
+import xml.etree.ElementTree as ET
+from openai import OpenAI
+import dateparser
+import locale
 from datetime import datetime, timedelta
 import hashlib
 import openai
@@ -198,7 +202,7 @@ def authenticate(username, password):
 
 
 # Get Groq API key from .env
-GROQ_API_KEY = api_key=st.secrets["GROQ_API_KEY"]
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 groq_client = None
 try:
@@ -214,7 +218,7 @@ except Exception as e:
 # ----------------- HELPERS -----------------
 # ----------------- CONFIG -----------------
 EMBEDDING_MODEL = 'all-MiniLM-L6-v2'
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ----------------- HELPER FUNCTIONS -----------------
 def clean_text(text):
@@ -281,63 +285,153 @@ def load_file(uploaded_file):
         st.error("Unsupported file type")
         return pd.DataFrame()
 
-def extract_numbers(text):
-    return [float(x.replace(',', '')) for x in re.findall(r'\b\d+(?:,\d{3})*(?:\.\d+)?\b', text)]
+OPENAI_API_KEY = ""  # replace with your key or load from env
+if not OPENAI_API_KEY:
+    st.error("⚠️ Please set your OpenAI API key in environment or secrets.toml")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-def generate_human_readable_summary(numbers, query, context_texts=None):
-    """
-    Generate a specific, human-readable answer using OpenAI.
-    If query relates to hotel data, try to extract fields like rooms, area, revenue.
-    """
-    if not numbers and not context_texts:
-        return "No relevant data found for your query.", None
+locale.setlocale(locale.LC_ALL, '')  # format numbers with commas
 
-    # Provide LLM with more context
-    context_sample = " ".join(context_texts[:5]) if context_texts else "No extra context"
-    numbers_str = ', '.join([f"{n:.2f}" for n in numbers[:50]])  # limit numbers
-
-    prompt = f"""
-    You are analyzing structured hotel dataset values.
-    User query: '{query}'
-    Extracted numbers: {numbers_str}
-    Context: {context_sample}
-
-    Instructions:
-    - If the query mentions hotel details (like "hotel 5", "rooms", "area", "revenue"), 
-      give a specific answer in plain English.
-    - Example output style:
-        "Hotel 5 has 8 rooms and generated 599,523.75 in revenue."
-    - Do not just list numbers; map them to meaning (rooms, revenue, area) if context allows.
-    - If uncertain, give your best interpretation based on context.
-    - Keep it short and precise.
-    """
-
+# -----------------------------
+# File Parsing
+# -----------------------------
+def parse_xml(content):
     try:
-        response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
-            max_tokens=200
-        )
-        summary = response.choices[0].message.content.strip()
-    except Exception as e:
-        summary = f"⚠️ Error generating summary: {e}"
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return []
 
-    # Auto-generate chart if query asks for it
-    if any(word in query.lower() for word in ["plot", "graph", "chart", "visualize"]):
-        fig, ax = plt.subplots(figsize=(5, 3))
-        ax.plot(numbers, marker="o", linestyle="-")
-        ax.set_title("Hotel Data Visualization", fontsize=10)
-        ax.set_xlabel("Index", fontsize=8)
-        ax.set_ylabel("Value", fontsize=8)
-        plt.tight_layout()
-        return summary, fig
+    def xml_to_dict(elem):
+        d = {}
+        for child in elem:
+            if len(child) > 0:
+                d[child.tag] = xml_to_dict(child)
+            else:
+                d[child.tag] = child.text or ""
+        return d
+    return [xml_to_dict(root)]
+
+def parse_html(content):
+    soup = BeautifulSoup(content, "html.parser")
+    return [{"text": soup.get_text(separator=" ", strip=True)}]
+
+def parse_txt(content):
+    return [{"text": content}]
+
+def parse_file(uploaded_file):
+    content = uploaded_file.read().decode("utf-8", errors="ignore")
+    name = uploaded_file.name.lower()
+    if name.endswith(".xml"):
+        return parse_xml(content)
+    elif name.endswith((".html", ".htm")):
+        return parse_html(content)
+    elif name.endswith(".txt"):
+        return parse_txt(content)
     else:
-        return summary, None
-    
+        return []
 
+# -----------------------------
+# Helpers
+# -----------------------------
+def flatten_json(y, prefix=""):
+    out = {}
+    def flatten(x, name=""):
+        if isinstance(x, dict):
+            for a in x:
+                flatten(x[a], f"{name}{a}_")
+        elif isinstance(x, list):
+            i = 0
+            for a in x:
+                flatten(a, f"{name}{i}_")
+                i += 1
+        else:
+            out[name[:-1]] = x
+    flatten(y, prefix)
+    return out
 
+def extract_fields(records):
+    fields = set()
+    for r in records:
+        flat = flatten_json(r)
+        fields.update(flat.keys())
+    return list(fields)
 
+def match_field_to_query(query, fields):
+    field_embeddings = [
+        client.embeddings.create(input=f, model="text-embedding-3-small").data[0].embedding
+        for f in fields
+    ]
+    q_emb = client.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
+    sims = [np.dot(q_emb, fe) / (np.linalg.norm(q_emb) * np.linalg.norm(fe)) for fe in field_embeddings]
+    return fields[int(np.argmax(sims))]
+
+def detect_date(value):
+    if not value or not isinstance(value, str):
+        return None
+    return dateparser.parse(value)
+
+# -----------------------------
+# Main Answer Function
+# -----------------------------
+def answer_from_data(query, records):
+    fields = extract_fields(records)
+    if not fields:
+        return None
+
+    best_field = match_field_to_query(query, fields)
+    query_date = dateparser.parse(query, settings={"PREFER_DAY_OF_MONTH": "first"})
+    total = 0
+    count = 0
+
+    for r in records:
+        flat = flatten_json(r)
+        value = flat.get(best_field)
+
+        try:
+            value = float(value)
+        except Exception:
+            continue
+
+        if query_date:
+            date_candidates = [detect_date(v) for v in flat.values() if isinstance(v, str)]
+            date_candidates = [d for d in date_candidates if d]
+            if date_candidates:
+                if any(d.month == query_date.month and d.year == query_date.year for d in date_candidates):
+                    total += value
+                    count += 1
+            else:
+                total += value
+                count += 1
+        else:
+            total += value
+            count += 1
+
+    if count > 0:
+        total_str = locale.format_string("%0.2f", total, grouping=True)
+        month_year = f" for {query_date.strftime('%B %Y')}" if query_date else ""
+        field_name = best_field.replace("_", " ").title()
+        return f"✅ The total **{field_name}**{month_year} is **{total_str}**"
+    return None
+
+# -----------------------------
+# GPT fallback
+# -----------------------------
+def ask_gpt(query, records):
+    context = json.dumps(records[:3], indent=2)
+    prompt = f"""
+You are a data assistant. Answer based only on the context.
+
+Context:
+{context}
+
+Question: {query}
+Answer in a clear, human-readable way:
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
 def rewrite_query(query):
         """Use Groq to rewrite the query into a clean version (fix slang/typos)."""
         if groq_client is None:
@@ -657,31 +751,30 @@ def show_chatbot():
         text_data = loaded_data[selected_file]["text"]
         
         st.success(f"✅ Chatting about: {selected_file}")
-        
         st.markdown("### 💬 Chat with your data")
         
-        # Chat container with improved styling
+        # Chat container
         chat_container = st.container()
         with chat_container:
             st.markdown('<div class="chat-container">', unsafe_allow_html=True)
             
-            # Display chat history with proper bubbles
+            # Display chat history
             for i, (role, message) in enumerate(st.session_state.chat_history):
                 if role == "user":
                     st.markdown(f'''
-                    <div class="user-message">
-                        <div class="user-bubble">
-                            <strong>You:</strong> {message}
+                        <div class="user-message">
+                            <div class="user-bubble">
+                                <strong>You:</strong> {message}
+                            </div>
                         </div>
-                    </div>
                     ''', unsafe_allow_html=True)
                 else:
                     st.markdown(f'''
-                    <div class="bot-message">
-                        <div class="bot-bubble">
-                            <strong>🤖 Assistant:</strong> {message}
+                        <div class="bot-message">
+                            <div class="bot-bubble">
+                                <strong>🤖 Assistant:</strong> {message}
+                            </div>
                         </div>
-                    </div>
                     ''', unsafe_allow_html=True)
             
             st.markdown('</div>', unsafe_allow_html=True)
@@ -696,42 +789,53 @@ def show_chatbot():
                     # Add user message to history
                     st.session_state.chat_history.append(("user", user_query))
                     
-                    # Get bot response
                     with st.spinner("Thinking..."):
-                        if st.session_state.file_type == 'unstructured' and text_data and df is not None and not df.empty:
-                            # For unstructured files, use semantic search
-                            try:
-                                model = load_embedding_model()
-                                index, embeddings = build_faiss_index(df['text'].tolist())
-                                
-                                query_vec = model.encode([user_query]).astype('float32')
-                                D, I = index.search(query_vec, k=5)
-                                
-                                top_texts = [df.iloc[idx]['text'] for idx in I[0]]
-                                context = "\n".join(top_texts)
-                                
-                                response = query_bot_response(pdf_text=context, query=user_query)
-                            except Exception as e:
-                                response = f"Error in semantic search: {str(e)}"
+                        response = None
+
+                        # ✅ Use parsed records if file is uploaded
+                        if selected_file:
+                            if "parsed_records" not in st.session_state:
+                                with st.spinner("🔄 Parsing file..."):
+                                    st.session_state.parsed_records = parse_file(selected_file)
+
+                            records = st.session_state.parsed_records
+
+                            if not records:
+                                response = "❌ Unsupported or empty file."
+                            else:
+                                ans = answer_from_data(user_query, records)
+                                if ans:
+                                    response = f"✅ {ans}"
+                                else:
+                                    gpt_ans = ask_gpt(user_query, records)
+                                    response = f"**Answer:** {gpt_ans}"
                         else:
-                            # For structured files or simple text
-                            response = query_bot_response(df=df, pdf_text=text_data, query=user_query)
-                    
+                            # Fallback → structured/unstructured logic
+                            if st.session_state.file_type == 'unstructured' and text_data and df is not None and not df.empty:
+                                try:
+                                    model = load_embedding_model()
+                                    index, embeddings = build_faiss_index(df['text'].tolist())
+                                    query_vec = model.encode([user_query]).astype('float32')
+                                    D, I = index.search(query_vec, k=5)
+                                    top_texts = [df.iloc[idx]['text'] for idx in I[0]]
+                                    context = "\n".join(top_texts)
+                                    response = query_bot_response(pdf_text=context, query=user_query)
+                                except Exception as e:
+                                    response = f"Error in semantic search: {str(e)}"
+                            else:
+                                response = query_bot_response(df=df, pdf_text=text_data, query=user_query)
+
                     # Add bot response to history
                     st.session_state.chat_history.append(("bot", response))
                     st.rerun()
                 else:
                     st.warning("Please enter a question!")
-        
+
         with col2:
             if st.button("Clear Chat", use_container_width=True):
                 st.session_state.chat_history = []
                 st.rerun()
-    else:
-        st.warning("No files uploaded. Please go back and upload files first.")
-        if st.button("← Back to Upload"):
-            st.session_state.current_page = 'file_upload'
-            st.rerun()
+
 
 def show_structured_analytics(df, filename):
     """Display analytics dashboard for structured data with 12 visualizations"""
@@ -1013,7 +1117,7 @@ import seaborn as sns
 import pandas as pd
 import openai
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ----------------- Parse with OpenAI -----------------
 def parse_with_openai(text_data, filename):
@@ -1047,9 +1151,6 @@ def parse_with_openai(text_data, filename):
 
 
 # ----------------- Usage -----------------
-import streamlit as st
-
-# Function to process the uploaded file
 def process_file(uploaded_file):
     text_data = uploaded_file.read().decode("utf-8")
    
@@ -1117,5 +1218,3 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
-
-
