@@ -810,6 +810,11 @@ def show_chatbot():
                                 response = f"**Answer:** {gpt_ans}"
                         
 
+                    st.session_state.chat_history.append(("bot", response))
+                    st.rerun()
+                else:
+                    st.warning("Please enter a question!")
+
         with col2:
             if st.button("Clear Chat", use_container_width=True):
                 st.session_state.chat_history = []
@@ -819,7 +824,6 @@ def show_chatbot():
         if st.button("← Back to Upload"):
             st.session_state.current_page = 'file_upload'
             st.rerun()
-
 
 def show_structured_analytics(df, filename):
     """Display analytics dashboard for structured data with 12 visualizations"""
@@ -1202,6 +1206,7 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
+
 
 
 
