@@ -146,22 +146,49 @@ def answer_from_data(query, records):
 # -----------------------------
 # GPT fallback
 # -----------------------------
-def ask_gpt(query, records):
-    context = json.dumps(records[:3], indent=2)
-    prompt = f"""
-You are a data assistant. Answer based only on the context.
+def ask_gpt(query, records, batch_size=50):
+    """
+    Send large records to GPT in batches and aggregate answers.
+    """
+    all_answers = []
+    total_records = len(records)
 
-Context:
+    for i in range(0, total_records, batch_size):
+        batch = records[i:i+batch_size]
+        context = json.dumps(batch, indent=2)
+
+        prompt = f"""
+You are a data assistant. Answer the following query based on the context.
+
+Query: {query}
+
+Context (records {i+1} to {i+len(batch)} out of {total_records}):
 {context}
 
-Question: {query}
-Answer in a clear, human-readable way:
+If the answer is not in this batch, reply "Not found in this batch".
+If the answer is partially here, provide what you can.
 """
-    response = client.chat.completions.create(
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        ans = response.choices[0].message.content.strip()
+        all_answers.append(ans)
+
+    # Aggregate all partial answers
+    final_prompt = f"""
+You are a data assistant. Here are partial answers from batches:
+
+{json.dumps(all_answers, indent=2)}
+
+Please combine them into one final clear answer to this question:
+{query}
+"""
+    final_response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": final_prompt}]
     )
-    return response.choices[0].message.content
+    return final_response.choices[0].message.content
 
 # -----------------------------
 # Streamlit UI
