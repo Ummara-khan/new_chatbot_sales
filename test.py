@@ -339,68 +339,66 @@ def generate_human_readable_summary(numbers, query, context_texts=None):
 
 
 def rewrite_query(query):
-    """Use Groq to rewrite the query into a clean version"""
-    if groq_client is None:
-        return query
-    try:
-        completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=[
-                {"role": "system", "content": "You are a query rewriter. Fix typos and slang, output only cleaned query."},
-                {"role": "user", "content": query}
-            ],
-            max_completion_tokens=64
-        )
-        return completion.choices[0].message.content.strip()
-    except Exception:
-        return query
+        """Use Groq to rewrite the query into a clean version (fix slang/typos)."""
+        if groq_client is None:
+            return query
+        try:
+            completion = groq_client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[{"role": "system", "content": "You are a query rewriter. Fix typos and slang, output only cleaned query."}, {"role": "user", "content": query}],
+                max_completion_tokens=64
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception:
+            return query  # fallback if Groq fails
 
 def query_bot_response(df=None, pdf_text="", query=""):
-    """Returns a human-readable bot-style response for data or PDF queries"""
-    if groq_client is None:
-        return "🤖 AI service is currently unavailable. Please configure your Groq API key."
-        
-    context_summary = ""
-    
-    try:
-        if df is not None and not df.empty:
-            numeric_cols = df.select_dtypes(include="number").columns
-            categorical_cols = df.select_dtypes(exclude="number").columns
+        """
+        Returns a human-readable bot-style response for data or PDF queries.
+        """
+        if groq_client is None:
+            return "🤖 AI service is currently unavailable. Please configure your Groq API key."
             
-            for col in numeric_cols[:5]:  # Limit to prevent context overflow
-                try:
-                    top_item = df.sort_values(col, ascending=False).iloc[0]
-                    text_col = categorical_cols[0] if len(categorical_cols) > 0 else None
-                    item_name = top_item[text_col] if text_col and text_col in top_item else f"Row {top_item.name}"
-                    context_summary += f"Column '{col}': top item is '{item_name}' with value {top_item[col]}\n"
-                except:
-                    continue
+        context_summary = ""
+        
+        try:
+            if df is not None and not df.empty:
+                numeric_cols = df.select_dtypes(include="number").columns
+                categorical_cols = df.select_dtypes(exclude="number").columns
+                
+                for col in numeric_cols[:5]:  # Limit to prevent context overflow
+                    try:
+                        top_item = df.sort_values(col, ascending=False).iloc[0]
+                        text_col = categorical_cols[0] if len(categorical_cols) > 0 else None
+                        item_name = top_item[text_col] if text_col and text_col in top_item else f"Row {top_item.name}"
+                        context_summary += f"Column '{col}': top item is '{item_name}' with value {top_item[col]}\n"
+                    except:
+                        continue
+                
+                for col in categorical_cols[:5]:  # Limit to prevent context overflow
+                    try:
+                        top_cat = df[col].value_counts().head(3)
+                        context_summary += f"Column '{col}': top categories are {dict(top_cat)}\n"
+                    except:
+                        continue
             
-            for col in categorical_cols[:5]:  # Limit to prevent context overflow
-                try:
-                    top_cat = df[col].value_counts().head(3)
-                    context_summary += f"Column '{col}': top categories are {dict(top_cat)}\n"
-                except:
-                    continue
-        
-        elif pdf_text:
-            paragraphs = [p.strip() for p in pdf_text.split("\n") if p.strip()]
-            counter = Counter(" ".join(paragraphs).split())
-            top_words = [w for w,c in counter.most_common(20)]
-            relevant_paragraphs = [p for p in paragraphs if any(w in p for w in top_words)]
-            context_summary = "\n".join(relevant_paragraphs)[:MAX_CONTEXT_LEN]
-        
-        completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-20b",  # Use available model instead of openai/gpt-oss-20b
-            messages=[
-                {"role":"system", "content":"You are a smart data analyst bot. Provide human-readable, concise answers. Reason about numeric/categorical trends. Summarize PDFs if needed."},
-                {"role":"user", "content": f"Context:\n{context_summary}\n\nQuestion: {query}"}
-            ],
-            max_completion_tokens=512
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        return f"❌ Error processing your query: {str(e)}"
+            elif pdf_text:
+                paragraphs = [p.strip() for p in pdf_text.split("\n") if p.strip()]
+                counter = Counter(" ".join(paragraphs).split())
+                top_words = [w for w,c in counter.most_common(20)]
+                relevant_paragraphs = [p for p in paragraphs if any(w in p for w in top_words)]
+                context_summary = "\n".join(relevant_paragraphs)[:MAX_CONTEXT_LEN]
+            
+            completion = groq_client.chat.completions.create(
+                model="openai/gpt-oss-20b",  # Use available model
+                messages=[{"role":"system", "content":"You are a smart data analyst bot. Provide human-readable, concise answers. Reason about numeric/categorical trends. Summarize PDFs if needed."}, {"role":"user", "content": f"Context:\n{context_summary}\n\nQuestion: {query}"}],
+                max_completion_tokens=512
+            )
+            msg = completion.choices[0].message
+            answer = getattr(msg, "content", str(msg))
+            return answer
+        except Exception as e:
+            return f"❌ Error processing your query: {str(e)}"
 
 # Login page
 def show_login():
@@ -1119,4 +1117,5 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
+
 
