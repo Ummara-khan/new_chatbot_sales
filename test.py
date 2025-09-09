@@ -808,26 +808,7 @@ def show_chatbot():
                             else:
                                 gpt_ans = ask_gpt(user_query, records)
                                 response = f"**Answer:** {gpt_ans}"
-                        else:
-                            # Fallback logic
-                            if st.session_state.file_type == 'unstructured' and text_data and df is not None and not df.empty:
-                                try:
-                                    model = load_embedding_model()
-                                    index, embeddings = build_faiss_index(df['text'].tolist())
-                                    query_vec = model.encode([user_query]).astype('float32')
-                                    D, I = index.search(query_vec, k=5)
-                                    top_texts = [df.iloc[idx]['text'] for idx in I[0]]
-                                    context = "\n".join(top_texts)
-                                    response = query_bot_response(pdf_text=context, query=user_query)
-                                except Exception as e:
-                                    response = f"Error in semantic search: {str(e)}"
-                            else:
-                                response = query_bot_response(df=df, pdf_text=text_data, query=user_query)
-
-                    st.session_state.chat_history.append(("bot", response))
-                    st.rerun()
-                else:
-                    st.warning("Please enter a question!")
+                        
 
         with col2:
             if st.button("Clear Chat", use_container_width=True):
@@ -838,6 +819,7 @@ def show_chatbot():
         if st.button("← Back to Upload"):
             st.session_state.current_page = 'file_upload'
             st.rerun()
+
 
 def show_structured_analytics(df, filename):
     """Display analytics dashboard for structured data with 12 visualizations"""
@@ -1220,6 +1202,7 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
+
 
 
 
