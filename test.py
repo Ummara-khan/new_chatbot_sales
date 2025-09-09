@@ -737,7 +737,7 @@ def build_faiss_index(texts):
 def show_chatbot():
     file_type_name = "Structured" if st.session_state.file_type == 'structured' else "Unstructured"
     st.markdown(f'<div class="main-header"><h1>💬 {file_type_name} AI Chatbot</h1></div>', unsafe_allow_html=True)
-    
+
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         if st.button("📊 Switch to Dashboard", use_container_width=True):
@@ -747,23 +747,23 @@ def show_chatbot():
         if st.button("← Back to Upload", use_container_width=True):
             st.session_state.current_page = 'file_upload'
             st.rerun()
-    
+
     if 'uploaded_files_data' in st.session_state and st.session_state.uploaded_files_data:
         loaded_data = st.session_state.uploaded_files_data
-        
+
         # File selector for chat
         selected_file = st.selectbox("📂 Select file to chat about", list(loaded_data.keys()))
         df = loaded_data[selected_file]["df"]
         text_data = loaded_data[selected_file]["text"]
-        
+
         st.success(f"✅ Chatting about: {selected_file}")
         st.markdown("### 💬 Chat with your data")
-        
+
         # Chat container
         chat_container = st.container()
         with chat_container:
             st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            
+
             # Display chat history
             for i, (role, message) in enumerate(st.session_state.chat_history):
                 if role == "user":
@@ -782,19 +782,22 @@ def show_chatbot():
                             </div>
                         </div>
                     ''', unsafe_allow_html=True)
-            
+
             st.markdown('</div>', unsafe_allow_html=True)
-        
+
         # Chat input
-        user_query = st.text_input("Ask a question about your data:", placeholder="What insights can you find in this data?")
-        
+        user_query = st.text_input(
+            "Ask a question about your data:",
+            placeholder="What insights can you find in this data?"
+        )
+
         col1, col2 = st.columns([1, 4])
         with col1:
             if st.button("Send", use_container_width=True):
                 if user_query:
                     # Add user message to history
                     st.session_state.chat_history.append(("user", user_query))
-                    
+
                     with st.spinner("Thinking..."):
                         response = None
 
@@ -802,7 +805,8 @@ def show_chatbot():
                         if selected_file:
                             if "parsed_records" not in st.session_state:
                                 with st.spinner("🔄 Parsing file..."):
-                                    st.session_state.parsed_records = parse_file(selected_file)
+                                    uploaded_file = loaded_data[selected_file]["file"]  # keep file object when uploading
+                                    st.session_state.parsed_records = parse_file(uploaded_file)
 
                             records = st.session_state.parsed_records
 
@@ -841,7 +845,6 @@ def show_chatbot():
             if st.button("Clear Chat", use_container_width=True):
                 st.session_state.chat_history = []
                 st.rerun()
-
 
 def show_structured_analytics(df, filename):
     """Display analytics dashboard for structured data with 12 visualizations"""
@@ -1224,5 +1227,6 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
+
 
 
