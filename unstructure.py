@@ -70,9 +70,14 @@ def ask_gpt(query, records, batch_size=50):
         context = json.dumps(batch, indent=2)
 
         prompt = f"""
-You are a helpful assistant. 
-Answer the user query based ONLY on the provided context. 
-Do not hallucinate. If not present, say "Not found".
+You are a precise data assistant. 
+You are given structured records from a file (XML/HTML/TXT converted to JSON). 
+Always answer based ONLY on the provided context. 
+
+⚠️ Rules:
+- If the user asks "how many", try to count matching records.
+- If the answer is numeric (like counts, totals), return the number clearly.
+- If information is not in this batch, just say "Not found in this batch".
 
 User Query:
 {query}
@@ -80,7 +85,7 @@ User Query:
 Context (records {i+1}–{i+len(batch)} of {total_records}):
 {context}
 
-Answer (concise and factual):
+Answer (concise, factual, no guessing):
 """
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -99,9 +104,10 @@ The user query was:
 Here are partial answers from multiple batches:
 {combined_context}
 
-Now combine them into ONE final clear answer.
-If multiple values exist, summarize the most relevant ones.
-If nothing relevant is found in all batches, just say "Not found".
+Now combine them into ONE final clear answer. 
+- If numbers were reported, add them up to give a total.
+- If text answers were reported, summarize concisely.
+- If nothing relevant was found, just say "Not found".
 """
 
     final_response = client.chat.completions.create(
