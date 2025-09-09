@@ -148,41 +148,50 @@ def answer_from_data(query, records):
 # -----------------------------
 def ask_gpt(query, records, batch_size=50):
     """
-    Send large records to GPT in batches and aggregate answers.
+    Generic GPT query processor for large datasets.
+    Splits records into batches, extracts partial answers, then aggregates.
     """
-    all_answers = []
+    batch_answers = []
     total_records = len(records)
 
+    # Step 1: Process in batches
     for i in range(0, total_records, batch_size):
         batch = records[i:i+batch_size]
         context = json.dumps(batch, indent=2)
 
         prompt = f"""
-You are a data assistant. Answer the following query based on the context.
+You are a data assistant. Answer the user query based ONLY on the given context. 
+If you find relevant information, extract it clearly. 
+If not found in this batch, just say "Not found".
 
-Query: {query}
+User query:
+{query}
 
-Context (records {i+1} to {i+len(batch)} out of {total_records}):
+Context (records {i+1}–{i+len(batch)} of {total_records}):
 {context}
 
-If the answer is not in this batch, reply "Not found in this batch".
-If the answer is partially here, provide what you can.
+Answer (keep it concise and factual, do not hallucinate):
 """
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}]
         )
         ans = response.choices[0].message.content.strip()
-        all_answers.append(ans)
+        batch_answers.append(ans)
 
-    # Aggregate all partial answers
+    # Step 2: Aggregate all answers
+    combined_context = "\n".join(batch_answers)
+
     final_prompt = f"""
-You are a data assistant. Here are partial answers from batches:
-
-{json.dumps(all_answers, indent=2)}
-
-Please combine them into one final clear answer to this question:
+The user query was:
 {query}
+
+Here are partial answers from multiple data batches:
+{combined_context}
+
+Now, combine them into ONE final clear answer. 
+If multiple values exist, summarize the most relevant ones. 
+Do not say 'Not found in this batch'. Just give the final best answer.
 """
     final_response = client.chat.completions.create(
         model="gpt-4o-mini",
