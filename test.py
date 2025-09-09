@@ -285,10 +285,16 @@ def load_file(uploaded_file):
         st.error("Unsupported file type")
         return pd.DataFrame()
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
-if not OPENAI_API_KEY:
-    st.error("⚠️ Please set your OpenAI API key in environment or secrets.toml")
-client = OpenAI(api_key=OPENAI_API_KEY)
+import streamlit as st
+from openai import OpenAI
+
+# Load API key from Streamlit secrets
+if "OPENAI_API_KEY" not in st.secrets:
+    st.error("⚠️ Please set your OpenAI API key in .streamlit/secrets.toml")
+else:
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 locale.setlocale(locale.LC_ALL, '')  # format numbers with commas
 
@@ -1218,4 +1224,5 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
+
 
