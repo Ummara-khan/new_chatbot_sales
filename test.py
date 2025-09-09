@@ -285,7 +285,7 @@ def load_file(uploaded_file):
         st.error("Unsupported file type")
         return pd.DataFrame()
 
-OPENAI_API_KEY = ""  # replace with your key or load from env
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 if not OPENAI_API_KEY:
     st.error("⚠️ Please set your OpenAI API key in environment or secrets.toml")
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -1218,3 +1218,4 @@ else:
         show_dashboard()
     elif st.session_state.current_page == 'chatbot':
         show_chatbot()
+
