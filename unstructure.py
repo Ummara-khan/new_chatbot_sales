@@ -1,143 +1,164 @@
-import os
-import json
 import streamlit as st
 from bs4 import BeautifulSoup
-import xml.etree.ElementTree as ET
-from openai import OpenAI
+from sentence_transformers import SentenceTransformer
+import faiss
+import numpy as np
+import re
+import json
+from groq import Groq
 
-# -----------------------------
-# Init OpenAI
-# -----------------------------
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", None)
+# ------------------------------
+# CONFIG
+# ------------------------------
+st.set_page_config(page_title="Readable XML/HTML Chatbot", layout="wide")
+st.title("📄 Offline XML/HTML Chatbot with Groq Reasoning")
 
-if not OPENAI_API_KEY:
-    st.error("⚠️ Please set your OpenAI API key in .streamlit/secrets.toml")
-else:
-    client = OpenAI(api_key=OPENAI_API_KEY)
+# Initialize Groq client
+import streamlit as st
 
-# -----------------------------
-# File Parsing
-# -----------------------------
-def parse_xml(content):
-    try:
-        root = ET.fromstring(content)
-    except ET.ParseError:
-        return []
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
-    def xml_to_dict(elem):
-        d = {}
-        for child in elem:
-            if len(child) > 0:
-                d[child.tag] = xml_to_dict(child)
-            else:
-                d[child.tag] = child.text or ""
-        return d
-    return [xml_to_dict(root)]
+client = Groq(api_key=GROQ_API_KEY)
 
-def parse_html(content):
-    soup = BeautifulSoup(content, "html.parser")
-    return [{"text": soup.get_text(separator=" ", strip=True)}]
+# ------------------------------
+# Load embedding model
+# ------------------------------
+@st.cache_resource
+def load_embedding_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-def parse_txt(content):
-    return [{"text": content}]
+embedding_model = load_embedding_model()
 
-def parse_file(uploaded_file):
-    content = uploaded_file.read().decode("utf-8", errors="ignore")
-    name = uploaded_file.name.lower()
-    if name.endswith(".xml"):
-        return parse_xml(content)
-    elif name.endswith((".html", ".htm")):
-        return parse_html(content)
-    elif name.endswith(".txt"):
-        return parse_txt(content)
+# ------------------------------
+# Flatten XML/HTML with paths
+# ------------------------------
+def flatten_with_paths(element, parent_path=""):
+    flat = {}
+    for child in element.find_all(recursive=False):
+        path = f"{parent_path}/{child.name}" if parent_path else child.name
+        if child.find_all(recursive=False):
+            flat.update(flatten_with_paths(child, path))
+        else:
+            flat[path] = child.get_text(strip=True)
+    return flat
+
+def flatten_xml_html(file_content, file_type="xml"):
+    if file_type == "xml":
+        soup = BeautifulSoup(file_content, "xml")
     else:
-        return []
+        soup = BeautifulSoup(file_content, "html.parser")
+    flattened = []
+    for r in soup.find_all(recursive=False):
+        flattened.append(flatten_with_paths(r))
+    return flattened
 
-# -----------------------------
-# GPT Query (batching support)
-# -----------------------------
-def ask_gpt(query, records, batch_size=50):
-    """
-    Use GPT to answer queries about any dataset (any structure).
-    Splits records into batches, gets partial answers, then aggregates.
-    """
-    batch_answers = []
-    total_records = len(records)
+# ------------------------------
+# Numeric Extraction Logic
+# ------------------------------
+def extract_numeric(flattened_chunks, query, agg="sum"):
+    query_words = [w.lower() for w in re.findall(r"\w+", query)]
+    values = []
 
-    # Step 1: Process batches
-    for i in range(0, total_records, batch_size):
-        batch = records[i:i+batch_size]
-        context = json.dumps(batch, indent=2)
+    for chunk in flattened_chunks:
+        if isinstance(chunk, dict):
+            for key, value in chunk.items():
+                if any(q in key.lower() or q in str(value).lower() for q in query_words):
+                    try:
+                        values.append(float(value))
+                    except:
+                        continue
 
-        prompt = f"""
-You are a precise data assistant. 
-You are given structured records from a file (XML/HTML/TXT converted to JSON). 
-Always answer based ONLY on the provided context. 
+    if not values:
+        return None
 
-⚠️ Rules:
-- If the user asks "how many", try to count matching records.
-- If the answer is numeric (like counts, totals), return the number clearly.
-- If information is not in this batch, just say "Not found in this batch".
+    if agg == "sum":
+        return f"Total {query}: {int(sum(values))}"
+    elif agg == "max":
+        return f"Highest {query}: {int(max(values))}"
+    else:
+        return f"{agg} of {query}: {values}"
 
-User Query:
-{query}
-
-Context (records {i+1}–{i+len(batch)} of {total_records}):
-{context}
-
-Answer (concise, factual, no guessing):
-"""
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
+# ------------------------------
+# Groq Answering
+# ------------------------------
+def ask_groq(user_query, retrieved_chunks, numeric_answer=None):
+    if numeric_answer:
+        system_prompt = "You are a helpful assistant. Rewrite the extracted numeric answer in a clear, natural way."
+        user_message = f"Query: {user_query}\nAnswer: {numeric_answer}"
+    else:
+        system_prompt = (
+            "You are a helpful assistant. Answer the query using only the retrieved context below. "
+            "If no clear answer, say 'No relevant data found.'"
+            "if ask about adr use revenue and give total value of it"
         )
-        ans = response.choices[0].message.content.strip()
-        batch_answers.append(ans)
 
-    # Step 2: Aggregate all partial answers
-    combined_context = "\n".join(batch_answers)
+        # Compact retrieved chunks
+        compact_context = []
+        for ch in retrieved_chunks:
+            compact_context.append(", ".join([f"{k}: {v}" for k, v in list(ch.items())[:6]]))  # limit 6 fields
+        context_str = "\n".join(compact_context)
 
-    final_prompt = f"""
-The user query was:
-{query}
+        user_message = f"Query: {user_query}\nContext:\n{context_str}"
 
-Here are partial answers from multiple batches:
-{combined_context}
-
-Now combine them into ONE final clear answer. 
-- If numbers were reported, add them up to give a total.
-- If text answers were reported, summarize concisely.
-- If nothing relevant was found, just say "Not found".
-"""
-
-    final_response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": final_prompt}]
+    completion = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.7,
+        max_completion_tokens=512,  # ⬅ reduce tokens
+        top_p=1,
+        stream=False
     )
-    return final_response.choices[0].message.content
 
-# -----------------------------
-# Streamlit UI
-# -----------------------------
-st.set_page_config(page_title="📂 Universal File Chatbot", layout="wide")
-st.title("📂 Universal File Chatbot (XML / HTML / TXT)")
+    return completion.choices[0].message.content
 
-uploaded_file = st.file_uploader("📂 Upload your file", type=["xml", "html", "htm", "txt"])
+
+
+# ------------------------------
+# Persistent Index (All Records)
+# ------------------------------
+if "faiss_index" not in st.session_state:
+    st.session_state.faiss_index = None
+    st.session_state.flattened_records = []
+
+uploaded_file = st.file_uploader("Upload XML/HTML file", type=["xml", "html"])
 
 if uploaded_file:
-    with st.spinner("🔄 Parsing file..."):
-        records = parse_file(uploaded_file)
+    file_content = uploaded_file.read()
+    file_type = uploaded_file.type.split("/")[-1]
 
-    if not records:
-        st.error("❌ Unsupported or empty file.")
-    else:
-        st.success(f"✅ File processed with {len(records)} records")
+    flattened_data = flatten_xml_html(file_content, file_type)
+    st.session_state.flattened_records.extend(flattened_data)
 
-        st.subheader("📊 Data Preview")
-        st.json(records[0] if records else {})
+    # Update FAISS index for ALL records
+    chunks_for_embedding = [str(record) for record in st.session_state.flattened_records]
+    embeddings = embedding_model.encode(chunks_for_embedding, convert_to_numpy=True)
 
-        query = st.text_input("💬 Ask a question about your file:")
-        if query:
-            with st.spinner("🔎 Asking GPT..."):
-                gpt_ans = ask_gpt(query, records)
-                st.markdown(f"**Answer:** {gpt_ans}")
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(embeddings)
+    st.session_state.faiss_index = index
+
+    st.success(f"Total {len(st.session_state.flattened_records)} records indexed!")
+
+# ------------------------------
+# Query
+# ------------------------------
+user_query = st.text_input("Ask a question about your data:")
+
+if user_query and st.session_state.faiss_index is not None:
+    query_vec = embedding_model.encode([user_query])
+    D, I = st.session_state.faiss_index.search(query_vec, k=5)
+    relevant_chunks = [st.session_state.flattened_records[i] for i in I[0]]
+
+    # Try numeric extraction
+    numeric_answer = extract_numeric(relevant_chunks, user_query, agg="sum")
+    if not numeric_answer:
+        numeric_answer = extract_numeric(relevant_chunks, user_query, agg="max")
+
+    # Ask Groq
+    final_answer = ask_groq(user_query, relevant_chunks, numeric_answer)
+
+    st.markdown("### Answer:")
+    st.markdown(final_answer)
