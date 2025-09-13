@@ -11,7 +11,7 @@ from groq import Groq
 # CONFIG
 # ------------------------------
 st.set_page_config(page_title="Readable XML/HTML Chatbot", layout="wide")
-st.title("📄 Offline XML/HTML Chatbot with Groq Reasoning")
+st.title("📄 Offline XML/HTML Chatbot")
 
 # Initialize Groq client
 import streamlit as st
